@@ -6,8 +6,15 @@
 	"description": "Basic Attribute System for Unity",
 	"keywords": [ "system", "attribute", "stats"],
 	"dependencies": {},
+	
+	"repository": {
+		"url": "https://github.com/Stanpac/StanpacPackages.git?path=Packages/com.stanpac.pacattributessystem",
+		"type": "git",
+	},
+	
 	"author": {
 		"name": "Stanpac",
 		"url": "https://stanpac.fr"
 	}
+	
 }
