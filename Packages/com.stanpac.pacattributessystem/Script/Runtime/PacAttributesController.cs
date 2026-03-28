@@ -1,6 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
 using UnityEngine;
+using System;
+using System.Collections.Generic;
+
+// For custom editor
+#if UNITY_EDITOR
+using System.Collections;
+using System.Reflection;
+using UnityEditor;
+using Object = UnityEngine.Object;
+#endif
 
 
 namespace PacAttributesSystem
@@ -22,21 +30,19 @@ namespace PacAttributesSystem
             public float CachedFinal; // Always valid 
         }
         
-        [SerializeField, Tooltip("If true, attributes will be rounded to the nearest integer")]
-        private bool bRoundAttributes = true;
+        [SerializeField, Tooltip("If true, attributes will be truncates to integer")]
+        private bool IntegerAttributes = true;
 
         /** All attributes hold by the controller */
-        [SerializeField, HideInInspector]
         private readonly Dictionary<T, SAttribute> Attributes = new();
         
         /** All modifiers applied to attributes */
-        [SerializeField, HideInInspector]
         private readonly Dictionary<T, List<PacAttributeModifier<T>>> Mods = new();
 
         /** Simple per-attribute event (new value only) */
         private readonly Dictionary<T, Action<float, float>> OnAttributeChangedCallback = new();
         
-        public void LoadProfile(PacAttributeProfile<T> profile)
+        public void LoadProfile(PacAttributesProfile<T> profile)
         {
             if (profile == null) return;
 
@@ -46,7 +52,7 @@ namespace PacAttributesSystem
             // Attributes
             for (int i = 0; i < profile.Attributes.Count; i++)
             {
-                PacAttributeProfile<T>.PacAttributeDef def = profile.Attributes[i];
+                PacAttributesProfile<T>.PacAttributeDef def = profile.Attributes[i];
 
                 Attributes[def.Type] = new SAttribute
                 {
@@ -253,7 +259,7 @@ namespace PacAttributesSystem
             // For now, clamp to 0 minimum and no maximum 
             if (value < 0f) value = 0f;
             
-            return bRoundAttributes ? Mathf.Round(value) : value;
+            return IntegerAttributes ? (int)value : value;
         }
 
         private float ApplyModifiers(T type, float start)
@@ -279,5 +285,297 @@ namespace PacAttributesSystem
             value *= (1f + sumPercent);
             return value;
         }
+    } 
+
+#if UNITY_EDITOR
+    /** Custom Editor that show attributes and modifiers in the inspector */
+    [CustomEditor(typeof(PacAttributesController<>), true)]
+    public class PacAttributesControllerEditor : Editor
+    {
+        private bool _attributesFoldout = true;
+        private bool _modsFoldout       = true;
+ 
+        private GUIStyle _headerStyle;
+        private GUIStyle _rowEvenStyle;
+        private GUIStyle _rowOddStyle;
+ 
+        private void InitStyles()
+        {
+            if (_headerStyle != null) return;
+ 
+            _headerStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 11,
+                normal   = { textColor = new Color(0.8f, 0.9f, 1f) }
+            };
+            _rowEvenStyle = new GUIStyle
+            {
+                normal  = { background = MakeTex(new Color(0.22f, 0.22f, 0.22f, 0.4f)) },
+                padding = new RectOffset(4, 4, 2, 2)
+            };
+            _rowOddStyle = new GUIStyle
+            {
+                normal  = { background = MakeTex(new Color(0.18f, 0.18f, 0.18f, 0.4f)) },
+                padding = new RectOffset(4, 4, 2, 2)
+            };
+        }
+ 
+        public override void OnInspectorGUI()
+        {
+            DrawDefaultInspector();
+            InitStyles();
+ 
+            var controller      = target;
+            var attributesField = FindFieldInHierarchy(controller.GetType(), "Attributes");
+            var modsField       = FindFieldInHierarchy(controller.GetType(), "Mods");
+ 
+            EditorGUILayout.Space(8);
+            
+            /* --- ATTRIBUTES ----------------------------------------------------------------- */
+            
+            // When collapsed, show a summary directly in the foldout label
+            string attrLabel;
+            if (attributesField == null)
+            {
+                attrLabel = "  Attributes  [field not found]";
+            }
+            else if (!_attributesFoldout)
+            {
+                int count = GetCount(attributesField.GetValue(controller));
+                attrLabel = count == 0
+                    ? "  Attributes  (empty)"
+                    : $"  Attributes  ({count} loaded)";
+            }
+            else
+            {
+                attrLabel = "  Attributes";
+            }
+ 
+            _attributesFoldout = EditorGUILayout.Foldout(_attributesFoldout, attrLabel, true, _headerStyle);
+ 
+            if (_attributesFoldout)
+            {
+                if (attributesField == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Could not find field 'Attributes' via reflection.\n" +
+                        "Make sure your component inherits from PacAttributesController<T>.",
+                        MessageType.Warning);
+                }
+                else
+                {
+                    var dict  = attributesField.GetValue(controller);
+                    int count = GetCount(dict);
+ 
+                    if (count == 0)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "No attributes loaded yet.\nCall LoadProfile() at runtime to populate.",
+                            MessageType.Info);
+                    }
+                    else
+                    {
+                        EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+                        EditorGUILayout.LabelField("Attribute", EditorStyles.miniLabel, GUILayout.MinWidth(120));
+                        EditorGUILayout.LabelField("Base",      EditorStyles.miniLabel, GUILayout.Width(70));
+                        EditorGUILayout.LabelField("Final",     EditorStyles.miniLabel, GUILayout.Width(70));
+                        EditorGUILayout.EndHorizontal();
+ 
+                        int row = 0;
+                        foreach (var (key, val) in IterateDict(dict))
+                        {
+                            float baseVal  = GetStructField<float>(val, "Base");
+                            float finalVal = GetStructField<float>(val, "CachedFinal");
+ 
+                            EditorGUILayout.BeginHorizontal(row % 2 == 0 ? _rowEvenStyle : _rowOddStyle);
+                            EditorGUILayout.LabelField($"  {key}", GUILayout.MinWidth(120));
+                            EditorGUILayout.LabelField(baseVal.ToString("F2"), GUILayout.Width(70));
+ 
+                            var prev = GUI.contentColor;
+                            GUI.contentColor = finalVal > baseVal ? Color.green
+                                             : finalVal < baseVal ? new Color(1f, 0.5f, 0.4f)
+                                             : Color.white;
+                            EditorGUILayout.LabelField(finalVal.ToString("F2"), GUILayout.Width(70));
+                            GUI.contentColor = prev;
+ 
+                            EditorGUILayout.EndHorizontal();
+                            row++;
+                        }
+                    }
+                }
+            }
+ 
+            EditorGUILayout.Space(6);
+            
+            /* --- MODIFIERS ----------------------------------------------------------------- */
+            
+            string modsLabel;
+            if (modsField == null)
+            {
+                modsLabel = "  Active Modifiers  [field not found]";
+            }
+            else if (!_modsFoldout)
+            {
+                int total = CountTotalMods(modsField.GetValue(controller));
+                modsLabel = total == 0
+                    ? "  Active Modifiers  (none)"
+                    : $"  Active Modifiers  ({total} active)";
+            }
+            else
+            {
+                modsLabel = "  Active Modifiers";
+            }
+ 
+            _modsFoldout = EditorGUILayout.Foldout(_modsFoldout, modsLabel, true, _headerStyle);
+ 
+            if (_modsFoldout)
+            {
+                if (modsField == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Could not find field 'Mods' via reflection.\n" +
+                        "Make sure your component inherits from PacAttributesController<T>.",
+                        MessageType.Warning);
+                }
+                else
+                {
+                    var  dict   = modsField.GetValue(controller);
+                    bool anyMod = false;
+ 
+                    foreach (var (key, listObj) in IterateDict(dict))
+                    {
+                        var list = listObj as IList;
+                        if (list == null || list.Count == 0) continue;
+                        anyMod = true;
+ 
+                        EditorGUILayout.LabelField(
+                            $"  {key}  ({list.Count} modifier{(list.Count > 1 ? "s" : "")})",
+                            EditorStyles.miniLabel);
+ 
+                        EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+                        EditorGUILayout.LabelField("Type",   EditorStyles.miniLabel, GUILayout.Width(110));
+                        EditorGUILayout.LabelField("Value",  EditorStyles.miniLabel, GUILayout.Width(60));
+                        EditorGUILayout.LabelField("Source", EditorStyles.miniLabel, GUILayout.MinWidth(80));
+                        EditorGUILayout.EndHorizontal();
+ 
+                        for (int i = 0; i < list.Count; i++)
+                        {
+                            var   mod       = list[i];
+                            var   modType   = mod.GetType();
+                            var   modKind   = modType.GetProperty("ModifierType")?.GetValue(mod);
+                            float modVal    = GetClassProp<float>(mod, "Value");
+                            var   modSource = modType.GetProperty("Source")?.GetValue(mod);
+ 
+                            string sourceStr = modSource is Object uObj
+                                ? (uObj != null ? uObj.name : "null")
+                                : modSource?.ToString() ?? "null";
+ 
+                            bool   isPercent = modKind?.ToString().Contains("Multiplicative") ?? false;
+                            string valStr    = isPercent
+                                ? $"{modVal * 100f:+0.##;-0.##}%"
+                                : $"{modVal:+0.##;-0.##}";
+ 
+                            EditorGUILayout.BeginHorizontal(i % 2 == 0 ? _rowEvenStyle : _rowOddStyle);
+                            EditorGUILayout.LabelField($"  {modKind}", GUILayout.Width(110));
+ 
+                            var prev = GUI.contentColor;
+                            GUI.contentColor = modVal >= 0 ? Color.green : new Color(1f, 0.5f, 0.4f);
+                            EditorGUILayout.LabelField(valStr, GUILayout.Width(60));
+                            GUI.contentColor = prev;
+ 
+                            EditorGUILayout.LabelField(sourceStr, GUILayout.MinWidth(80));
+                            EditorGUILayout.EndHorizontal();
+                        }
+                        EditorGUILayout.Space(4);
+                    }
+ 
+                    if (!anyMod)
+                        EditorGUILayout.HelpBox("No active modifiers.", MessageType.Info);
+                }
+            }
+ 
+            if (Application.isPlaying)
+                Repaint();
+        }
+ 
+        /* --- Helpers ----------------------------------------------------------------- */
+ 
+        /** Walk up the type hierarchy to find a private field declared on a base class */
+        private static FieldInfo FindFieldInHierarchy(Type type, string fieldName)
+        {
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            while (type != null && type != typeof(object))
+            {
+                var fi = type.GetField(fieldName, flags);
+                if (fi != null) return fi;
+                type = type.BaseType;
+            }
+            return null;
+        }
+
+        private static int GetCount(object dict)
+        {
+            if (dict == null) return 0;
+            return dict.GetType().GetProperty("Count")?.GetValue(dict) as int? ?? 0;
+        }
+
+        private static int CountTotalMods(object dict)
+        {
+            int total = 0;
+            foreach (var (_, listObj) in IterateDict(dict))
+            {
+                if (listObj is IList list) total += list.Count;
+            }
+            return total;
+        }
+
+        /** Iterates any Dictionary via reflection, regardless of key/value generic types */
+        private static IEnumerable<(object key, object value)> IterateDict(object dict)
+        {
+            if (dict == null) yield break;
+            var getEnumerator = dict.GetType().GetMethod("GetEnumerator");
+            if (getEnumerator == null) yield break;
+            var enumerator  = getEnumerator.Invoke(dict, null);
+            var enumType    = enumerator.GetType();
+            var moveNext    = enumType.GetMethod("MoveNext");
+            var currentProp = enumType.GetProperty("Current");
+            if (moveNext == null || currentProp == null) yield break;
+            while ((bool)moveNext.Invoke(enumerator, null))
+            {
+                var kvp     = currentProp.GetValue(enumerator);
+                var kvpType = kvp.GetType();
+                var key     = kvpType.GetProperty("Key")  ?.GetValue(kvp);
+                var value   = kvpType.GetProperty("Value")?.GetValue(kvp);
+                yield return (key, value);
+            }
+            (enumerator as IDisposable)?.Dispose();
+        }
+
+        /** Read a field from a boxed struct */
+        private static TVal GetStructField<TVal>(object obj, string fieldName)
+        {
+            if (obj == null) return default;
+            var fi = obj.GetType().GetField(fieldName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            return fi != null ? (TVal)(fi.GetValue(obj) ?? default(TVal)) : default;
+        }
+
+        /** Read a property from a class instance */
+        private static TVal GetClassProp<TVal>(object obj, string propName)
+        {
+            if (obj == null) return default;
+            var pi = obj.GetType().GetProperty(propName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            return pi != null ? (TVal)(pi.GetValue(obj) ?? default(TVal)) : default;
+        }
+ 
+        private static Texture2D MakeTex(Color col)
+        {
+            var tex = new Texture2D(1, 1);
+            tex.SetPixel(0, 0, col);
+            tex.Apply();
+            return tex;
+        }
     }
+#endif
 }

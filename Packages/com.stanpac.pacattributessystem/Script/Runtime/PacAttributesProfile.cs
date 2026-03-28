@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System;
 using System.Collections.Generic;
 
@@ -8,9 +8,8 @@ using UnityEditor;
 
 namespace PacAttributesSystem
 {
-    /** ScriptableObject to hold a profile of attributes */
-    [CreateAssetMenu(fileName = "New Attribute Profile", menuName = "Stanpac/Attribute")]
-    public class PacAttributeProfile<T> : ScriptableObject where T : Enum
+    /** Base ScriptableObject to hold a profile of attributes */
+    public class PacAttributesProfile<T> : ScriptableObject where T : Enum
     {
         [Serializable]
         public class PacAttributeDef
@@ -55,23 +54,30 @@ namespace PacAttributesSystem
     }
     
 #if UNITY_EDITOR
-    [CustomEditor(typeof(PacAttributeProfile<>), true)]
+    [CustomEditor(typeof(PacAttributesProfile<>), true)]
     public class GAttributeProfileEditor : Editor
     {
         public override void OnInspectorGUI()
         {
             DrawDefaultInspector();
             
-            var profile = (PacAttributeProfile<Enum>)target;
-            
             EditorGUILayout.Space();
             EditorGUILayout.Space();
             
             if (GUILayout.Button("Add All Attributes", GUILayout.Height(30)))
             {
-                profile.AddAllAttributes();
-                EditorUtility.SetDirty(profile);
-                AssetDatabase.SaveAssets();
+                // Use reflection to call AddAllAttributes method
+                var addAllAttributesMethod = target.GetType().GetMethod("AddAllAttributes");
+                if (addAllAttributesMethod != null)
+                {
+                    addAllAttributesMethod.Invoke(target, null);
+                    EditorUtility.SetDirty(target);
+                    AssetDatabase.SaveAssets();
+                }
+                else
+                {
+                    Debug.LogError("AddAllAttributes method not found on target");
+                }
             }
             
             EditorGUILayout.HelpBox("Click 'Add All Attributes' to automatically add all enum values to the profile.", MessageType.Info);
